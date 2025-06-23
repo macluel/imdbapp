@@ -282,7 +282,7 @@ def main():
             main_app(notion_token, database_id, tmdb_api_key)
         if st.button("Sair"):
             st.session_state.clear()
-            st.experimental_rerun()
+            st.rerun()
 
 if __name__ == "__main__":
     main()
