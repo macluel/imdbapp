@@ -15,8 +15,7 @@ def show_credentials_page():
                 st.session_state["DATABASE_ID"] = DATABASE_ID
                 st.session_state["TMDB_API_KEY"] = TMDB_API_KEY
                 st.session_state["authenticated"] = True
-                st.success("Credenciais salvas! Recarregando app...")
-                st.experimental_rerun()
+                st.success("Credenciais salvas! Você já pode usar o app.")
             else:
                 st.error("Por favor, preencha todas as credenciais.")
 
@@ -41,7 +40,7 @@ def get_movies_from_notion(token, database_id):
 def safe_extract_title(page):
     try:
         title_obj = page.get("properties", {}).get("Title", {}).get("title", [])
-        if title_obj and isinstance(title_obj, list):
+        if title_obj and isinstance(title_obj, list) and len(title_obj) > 0:
             return title_obj[0].get("plain_text", "")
     except Exception as e:
         st.warning(f"Erro ao extrair título: {e}")
@@ -50,7 +49,7 @@ def safe_extract_title(page):
 def safe_extract_original_title(page):
     try:
         orig_obj = page.get("properties", {}).get("Original Title", {}).get("rich_text", [])
-        if orig_obj and isinstance(orig_obj, list):
+        if orig_obj and isinstance(orig_obj, list) and len(orig_obj) > 0:
             return orig_obj[0].get("plain_text", "")
     except Exception as e:
         st.warning(f"Erro ao extrair título original: {e}")
@@ -133,12 +132,10 @@ def update_movie_fields_in_notion(token, page_id, movie):
 def main_app():
     st.title("🎬 Notion + TMDb Poster Picker & Atualizador")
 
-    # Recupera credenciais da sessão
     notion_token = st.session_state.get("NOTION_TOKEN")
     database_id = st.session_state.get("DATABASE_ID")
     tmdb_api_key = st.session_state.get("TMDB_API_KEY")
 
-    # Busca filmes do Notion
     movies = get_movies_from_notion(notion_token, database_id)
     if not movies:
         st.warning("Nenhum filme encontrado no Notion.")
@@ -162,7 +159,6 @@ def main_app():
     selected_orig_title = safe_extract_original_title(selected_page)
     st.markdown(f"**Selecionado:** `{selected_title}` (`{selected_orig_title}`)")
 
-    # -- Buscar no TMDb --
     st.subheader("1️⃣ Buscar filme no TMDb")
     search_query = st.text_input("Título para buscar no TMDb:", value=selected_orig_title or selected_title)
     tmdb_results = search_tmdb_movie(search_query, tmdb_api_key)
@@ -175,12 +171,10 @@ def main_app():
     tmdb_movie = tmdb_results[tmdb_idx]
     st.write(f"Selecionado TMDb: {tmdb_movie['title']} ({tmdb_movie.get('release_date', '??')[:4]})")
 
-    # -- Atualizar campos do Notion (opcional) --
     if st.button("Atualizar campos principais do Notion com dados do TMDb"):
         tmdb_details = get_tmdb_details(tmdb_movie["id"], tmdb_api_key)
         update_movie_fields_in_notion(notion_token, selected_page["id"], tmdb_details)
 
-    # -- Escolher e atualizar pôster --
     st.subheader("2️⃣ Escolher o pôster")
     posters = get_posters_from_tmdb(tmdb_movie["id"], tmdb_api_key)
     if not posters:
@@ -200,7 +194,7 @@ def main_app():
     if chosen_poster_url:
         st.success("Pôster selecionado! Atualizando Notion...")
         update_poster_in_notion(notion_token, selected_page["id"], chosen_poster_url)
-        st.session_state["chosen_poster_url"] = None  # Limpa para evitar múltiplas atualizações
+        st.session_state["chosen_poster_url"] = None
 
 def main():
     if "authenticated" not in st.session_state or not st.session_state["authenticated"]:
@@ -209,7 +203,6 @@ def main():
         main_app()
         if st.button("Sair"):
             st.session_state.clear()
-            st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
