@@ -1,24 +1,52 @@
 import streamlit as st
 import requests
 import json
+import gspread
+from google.oauth2.service_account import Credentials
+import bcrypt
 
-def show_credentials_page():
-    st.title("🔐 Insira suas credenciais")
-    with st.form("credentials_form"):
-        NOTION_TOKEN = st.text_input("Notion Token", type="password")
-        DATABASE_ID = st.text_input("Notion Database ID")
-        TMDB_API_KEY = st.text_input("TMDb API Key", type="password")
-        submitted = st.form_submit_button("Entrar")
-        if submitted:
-            if NOTION_TOKEN and DATABASE_ID and TMDB_API_KEY:
-                st.session_state["NOTION_TOKEN"] = NOTION_TOKEN
-                st.session_state["DATABASE_ID"] = DATABASE_ID
-                st.session_state["TMDB_API_KEY"] = TMDB_API_KEY
-                st.session_state["authenticated"] = True
-                st.success("Credenciais salvas! Você já pode usar o app.")
-            else:
-                st.error("Por favor, preencha todas as credenciais.")
+# --- Google Sheets Setup ---
+SCOPES = [
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive'
+]
+creds_dict = st.secrets["google"]
+credentials = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+gc = gspread.authorize(credentials)
 
+SHEET_NAME = "UserCredentials"
+sheet = gc.open(SHEET_NAME).sheet1
+
+# --- Helper Functions for User Auth ---
+def get_user_row(username):
+    users = sheet.get_all_records()
+    for i, user in enumerate(users):
+        if user['username'] == username:
+            return i+2, user  # +2 for 1-indexed + header
+    return None, None
+
+def hash_password(password):
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+def check_password(password, hashed):
+    return bcrypt.checkpw(password.encode(), hashed.encode())
+
+def register_user(username, password):
+    hashed = hash_password(password)
+    sheet.append_row([username, hashed, '', '', ''])
+
+def update_credentials(username, notion_token, database_id, tmdb_api_key):
+    row, _ = get_user_row(username)
+    if row:
+        sheet.update(f'C{row}:E{row}', [[notion_token, database_id, tmdb_api_key]])
+
+def get_credentials(username):
+    _, user = get_user_row(username)
+    if user:
+        return user['notion_token'], user['database_id'], user['tmdb_api_key']
+    return '', '', ''
+
+# --- Movie/Notion/TMDB logic (your original functions) ---
 def get_notion_headers(token):
     return {
         "Authorization": f"Bearer {token}",
@@ -129,12 +157,9 @@ def update_movie_fields_in_notion(token, page_id, movie):
         if hasattr(e, 'response') and e.response is not None:
             st.error(f"Response: {e.response.text}")
 
-def main_app():
+# --- Main App Logic ---
+def main_app(notion_token, database_id, tmdb_api_key):
     st.title("🎬 Notion + TMDb Poster Picker & Atualizador")
-
-    notion_token = st.session_state.get("NOTION_TOKEN")
-    database_id = st.session_state.get("DATABASE_ID")
-    tmdb_api_key = st.session_state.get("TMDB_API_KEY")
 
     movies = get_movies_from_notion(notion_token, database_id)
     if not movies:
@@ -196,13 +221,68 @@ def main_app():
         update_poster_in_notion(notion_token, selected_page["id"], chosen_poster_url)
         st.session_state["chosen_poster_url"] = None
 
+# --- Login & Sign Up UI ---
+def login_signup():
+    st.title("🔑 Login/Cadastro de Usuário")
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+
+    mode = st.radio("Escolha:", ["Entrar", "Registrar"])
+
+    if mode == "Registrar":
+        st.subheader("Criar Conta")
+        reg_username = st.text_input("Usuário", key="reg_user")
+        reg_password = st.text_input("Senha", type="password", key="reg_pass")
+        if st.button("Registrar"):
+            row, _ = get_user_row(reg_username)
+            if row:
+                st.error("Usuário já existe.")
+            else:
+                register_user(reg_username, reg_password)
+                st.success("Registrado! Agora faça login.")
+
+    if mode == "Entrar":
+        st.subheader("Login")
+        username = st.text_input("Usuário", key="login_user")
+        password = st.text_input("Senha", type="password", key="login_pass")
+        if st.button("Entrar"):
+            row, user = get_user_row(username)
+            if not row:
+                st.error("Usuário não encontrado.")
+            elif not check_password(password, user['password_hash']):
+                st.error("Senha incorreta.")
+            else:
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.success("Logado! Avance para salvar credenciais ou usar o app.")
+
+def credentials_ui():
+    st.subheader("Salve suas credenciais de API")
+    notion_token, database_id, tmdb_api_key = get_credentials(st.session_state.username)
+    notion_token = st.text_input("Notion Token", value=notion_token or "")
+    database_id = st.text_input("Database ID", value=database_id or "")
+    tmdb_api_key = st.text_input("TMDb API Key", value=tmdb_api_key or "")
+    if st.button("Salvar Credenciais"):
+        update_credentials(st.session_state.username, notion_token, database_id, tmdb_api_key)
+        st.success("Credenciais salvas!")
+    return notion_token, database_id, tmdb_api_key
+
 def main():
-    if "authenticated" not in st.session_state or not st.session_state["authenticated"]:
-        show_credentials_page()
+    if not st.session_state.get("logged_in", False):
+        login_signup()
     else:
-        main_app()
+        notion_token, database_id, tmdb_api_key = get_credentials(st.session_state.username)
+        # If any credentials missing, ask user to save them
+        if not (notion_token and database_id and tmdb_api_key):
+            notion_token, database_id, tmdb_api_key = credentials_ui()
+        # If still missing, wait for user
+        if not (notion_token and database_id and tmdb_api_key):
+            st.info("Por favor, salve todas as credenciais para usar o app.")
+        else:
+            main_app(notion_token, database_id, tmdb_api_key)
         if st.button("Sair"):
             st.session_state.clear()
+            st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
